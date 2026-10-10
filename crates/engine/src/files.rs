@@ -353,7 +353,7 @@ fn load_bytes_now(
         let relative = crate::camera_preview::file_local_look(raw.format) && t.matrix_is_fallback;
         // White balance re-evaluates the file's own colour model (when it has one and no
         // file-local look matrix sits on top of it)
-        let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
+        let camera_color = (!t.matrix_is_fallback && camera_look.as_ref().is_none_or(|l| l.keeps_file_colour())).then(|| {
             let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
             Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
         });

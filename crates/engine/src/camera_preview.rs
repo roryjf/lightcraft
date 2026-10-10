@@ -45,7 +45,32 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
     )
 }
 
+/// A camera-made DNG (Ricoh, Pentax, Leica…) carries a colour matrix but no profile look: no tone curve, look table,
+/// hue/saturation map or gain table map. Its colour model is kept and only the tone and chroma curves are fitted to
+/// its own JPEG preview; without that it renders on the neutral fallback curve, flat and dull next to the preview.
+fn dng_without_look(raw: &RawImage, transform: &CameraTransform) -> bool {
+    raw.format == RawFormat::Dng && !transform.matrix_is_fallback && raw.color.profile.is_empty()
+}
+
+impl CameraLook {
+    /// Whether the look keeps the file's own colour model (tone and chroma curves only), so white balance can still
+    /// re-evaluate it.
+    pub(crate) fn keeps_file_colour(&self) -> bool {
+        self.matrix == Mat3::IDENTITY && self.hue_sat.is_none()
+    }
+}
+
 pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform) -> Option<CameraLook> {
+    if dng_without_look(raw, transform) {
+        let (sensor, reference) = proxies(raw, bytes, transform, PROXY)?;
+        let look = [ToneFit::Quantile, ToneFit::ConditionalMedian]
+            .iter()
+            .find_map(|&tone| fit_candidate(&sensor, &reference, Some((Mat3::IDENTITY, None)), tone));
+        if lightcraft_pipeline::profiling() {
+            eprintln!("[profile] DNG without a profile look: tone fitted to its preview {:?}", look.as_ref().map(|l| l.tone));
+        }
+        return look;
+    }
     if !transform.matrix_is_fallback || !file_local_look(raw.format) {
         return None;
     }
@@ -1394,5 +1419,91 @@ mod tests {
         let swapped = fit_pairs_ordered(&sensor, &reference, None, &[ToneFit::ConditionalMedian, ToneFit::Quantile]).unwrap();
         let conditional = fit_pairs_ordered(&sensor, &reference, None, &[ToneFit::ConditionalMedian]).unwrap();
         assert_eq!(swapped.tone, conditional.tone);
+    }
+
+    /// `dng` (little-endian, as `write_dng` writes it) with `jpeg` as its embedded preview, in a second top-level IFD.
+    fn with_jpeg_preview(mut dng: Vec<u8>, jpeg: &[u8]) -> Vec<u8> {
+        let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
+        let ifd0 = u32_at(&dng, 4);
+        let next = ifd0 + 2 + 12 * usize::from(u16::from_le_bytes([dng[ifd0], dng[ifd0 + 1]]));
+        assert_eq!(u32_at(&dng, next), 0, "IFD0 is the last top-level IFD");
+        if dng.len() % 2 == 1 {
+            dng.push(0);
+        }
+        let ifd1 = dng.len();
+        dng[next..next + 4].copy_from_slice(&(ifd1 as u32).to_le_bytes());
+        dng.extend(2u16.to_le_bytes());
+        // JPEGInterchangeFormat, JPEGInterchangeFormatLength (LONG)
+        for (tag, value) in [(0x201u16, ifd1 + 2 + 2 * 12 + 4), (0x202, jpeg.len())] {
+            dng.extend(tag.to_le_bytes());
+            dng.extend(4u16.to_le_bytes());
+            dng.extend(1u32.to_le_bytes());
+            dng.extend((value as u32).to_le_bytes());
+        }
+        dng.extend(0u32.to_le_bytes());
+        dng.extend_from_slice(jpeg);
+        dng
+    }
+
+    /// A camera-made DNG (Ricoh GR IV, Pentax, Leica) has a colour matrix but no profile look. It used to render on the
+    /// neutral fallback curve, darker and flatter than its own preview (the picture "faded" once the raw replaced the
+    /// preview). Its tone is now fitted to the preview, and its colour model stays (white balance re-evaluates it).
+    #[test]
+    fn dng_without_a_profile_look_gets_its_tone_from_its_preview() {
+        use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let (w, h) = (192usize, 128usize);
+        // coloured patches under a brightness ramp, as an RGGB mosaic
+        let scene = |x: usize, y: usize| -> [f32; 3] {
+            let patch =
+                [[0.9, 0.3, 0.2], [0.3, 0.8, 0.3], [0.25, 0.35, 0.9], [0.8, 0.75, 0.3], [0.6, 0.6, 0.6], [0.7, 0.4, 0.8]][(x / 32 + y / 32 * 2) % 6];
+            let ramp = 0.04 + 0.6 * (x % 32 + (y % 32) * 32) as f32 / 1024.0;
+            patch.map(|c| c * ramp)
+        };
+        let data: Vec<u16> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let c = match (x % 2, y % 2) {
+                    (0, 0) => 0,
+                    (1, 1) => 2,
+                    _ => 1,
+                };
+                (256.0 + scene(x & !1, y & !1)[c] * 15000.0) as u16
+            })
+            .collect();
+        let dng = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default());
+        let (plain, info) = crate::files::load_bytes(&dng, w).unwrap();
+        assert!(info.camera_tone.is_none() && info.camera_color.is_some(), "no preview: the neutral fallback");
+        // the camera's own rendering of the same picture: brighter and contrastier than the fallback curve
+        let to_srgb = REC2020.to_space(&lightcraft_color::SRGB).to_f32();
+        let px: Vec<u8> = plain
+            .data
+            .iter()
+            .flat_map(|p| {
+                let s: [f32; 3] = std::array::from_fn(|i| to_srgb[i][0] * p[0] + to_srgb[i][1] * p[1] + to_srgb[i][2] * p[2]);
+                s.map(|v| {
+                    let t = 1.8 * v.max(0.0);
+                    lightcraft_color::transfer::encode_srgb8(t / (1.0 + 0.55 * t))
+                })
+            })
+            .collect();
+        let jpeg = encode_jpeg(
+            &EncodeImage::new(plain.width as u32, plain.height as u32, 3, Samples::U8(&px)),
+            95,
+            ChromaSubsampling::S444,
+            &EncodeMeta::default(),
+        )
+        .unwrap();
+        let bytes = with_jpeg_preview(dng, &jpeg);
+        let raw = lightcraft_raw::decode(&bytes).unwrap();
+        assert!(raw.color.profile.is_empty());
+        let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        let look = fit_preview(&raw, &bytes, &transform).expect("the tone is fitted to the preview");
+        assert!(look.keeps_file_colour(), "the DNG's own colour model is kept");
+        let (_, info) = crate::files::load_bytes(&bytes, w).unwrap();
+        assert!(info.camera_tone.is_some() && info.camera_color.is_some() && !info.relative_wb);
+        // and the fitted curve renders mid-grey nearer the camera's rendering than the fallback did
+        let camera = |v: f32| 1.8 * v / (1.0 + 0.55 * 1.8 * v);
+        let (fitted, fallback) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.18), ToneMap::new(0.0, 0.0, 0.0).apply(0.18));
+        assert!(fitted > fallback && (fitted - camera(0.18)).abs() < (fallback - camera(0.18)).abs() * 0.7, "{fitted} {fallback}");
     }
 }
