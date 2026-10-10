@@ -1670,7 +1670,8 @@ mod tests {
         let parent_index = dir.to_string_lossy().split(['/', '\\']).filter(|p| !p.is_empty()).count() - 1;
         assert_eq!(h.request("ui.clickWidget", json!({"id": format!("crumb:{parent_index}")}), t)["ok"], true);
         h.settle(SETTLE);
-        assert_eq!(h.app.session.browse.as_ref().unwrap().path, dir.to_string_lossy().replace('\\', "/"));
+        // compared as paths: the browsed path is the platform's own spelling (`C:\…` on Windows)
+        assert_eq!(std::path::Path::new(&h.app.session.browse.as_ref().unwrap().path), dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
