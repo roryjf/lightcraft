@@ -176,6 +176,11 @@ pub enum Op {
         id: PhotoId,
         analysis: Option<crate::Analysis>,
     },
+    /// A photo's lens profile (`None`: none). Format version 4.
+    SetLensProfile {
+        id: PhotoId,
+        profile: Option<Box<crate::model::LensProfile>>,
+    },
     /// Rename a photo: its file name and the source it points to. Applying the op never touches
     /// the disk — the engine moves the file before it commits (and on undo/redo).
     SetFile {
@@ -569,6 +574,11 @@ impl Catalog {
             Op::SetAnalysis { id, analysis } => {
                 let p = self.photo_mut(id)?;
                 Op::SetAnalysis { id, analysis: std::mem::replace(&mut p.analysis, analysis) }
+            }
+            Op::SetLensProfile { id, profile } => {
+                let p = self.photo_mut(id)?;
+                let old = std::mem::replace(&mut p.profile_lens, profile.map(|b| *b));
+                Op::SetLensProfile { id, profile: old.map(Box::new) }
             }
             Op::SetCaptured { id, captured } => {
                 if let Some(c) = &captured

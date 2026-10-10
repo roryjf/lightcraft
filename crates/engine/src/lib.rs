@@ -35,6 +35,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod lens_profiles;
 pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
@@ -177,6 +178,8 @@ pub struct Session {
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
+    /// Lens profiles (lensfun database): where they are kept, the loaded database, a download in progress.
+    pub lens_profiles: lens_profiles::LensProfiles,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
     pub(crate) face_catalog: lightcraft_faces::catalog::Catalog,
     /// The loaded recognition model and the face embeddings made with it.
@@ -296,6 +299,7 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            lens_profiles: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
@@ -858,6 +862,8 @@ mod tests_forget_local;
 mod tests_import;
 #[cfg(test)]
 mod tests_import_move;
+#[cfg(test)]
+mod tests_lens_profiles;
 #[cfg(test)]
 mod tests_libops;
 #[cfg(test)]

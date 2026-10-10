@@ -300,7 +300,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
-        let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
+        let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.lens_correction().is_some());
+        // which correction applies: the file's own, a lens profile (its name), or none
+        let lens_note = app.session.catalog.photo(id).map(|p| match (&p.embedded_lens, &p.profile_lens) {
+            (Some(_), _) => crate::i18n::tr("Using the correction recorded in this file.").to_string(),
+            (None, Some(pr)) => format!("{} {} ({})", crate::i18n::tr("Profile:"), pr.lens, pr.source),
+            (None, None) => {
+                crate::i18n::tr("No lens profile for this photo: download lens profiles in Settings → Lens Profiles, then Apply to Library.")
+                    .to_string()
+            }
+        });
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
             if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
@@ -310,12 +319,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file (DNG lens opcodes only)."))
-                        .size(11.0)
-                        .color(Tokens::get(ui.ctx()).text_dim),
-                );
+            if lp && let Some(note) = &lens_note {
+                ui.label(egui::RichText::new(note).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
             }
         });
         if d.optics.lens_profile {

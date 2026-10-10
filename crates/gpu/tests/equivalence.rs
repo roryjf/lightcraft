@@ -459,13 +459,14 @@ fn embedded_lens_perspective_edges_match() {
     // Embedded DNG lens corrections (per-plane warp + vignette) with manual CA.
     let lens = EmbeddedLens {
         warp: Some(EmbeddedWarp {
+            odd: Default::default(),
             planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002], [1.0, -0.028, 0.01, 0.0, 0.001, -0.002], [1.0, -0.026, 0.01, 0.0, 0.001, -0.002]],
             center: Point::new(0.52, 0.48),
             radius: 0.6,
         }),
         vignette: Some(EmbeddedVignette { k: [0.4, -0.1, 0.02, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
     };
-    let info = SourceInfo { lens: Some(lens), ..raw };
+    let info = SourceInfo { lens: Some(lens), ..raw.clone() };
     let mut s = DevelopSettings::default();
     s.optics.lens_profile = true;
     s.optics.ca_red = 30.0;
@@ -473,6 +474,19 @@ fn embedded_lens_perspective_edges_match() {
     check("embedded lens + perspective", &src, &info, &s, &RenderRequest::fit(700, 700));
     s.orientation = Orientation::Rotate270;
     check("embedded lens rotated", &src, &info, &s, &RenderRequest::fit(700, 700));
+    // A lens profile with odd radial terms (lensfun PTLens distortion, per-plane TCA) and its vignetting.
+    let profile = EmbeddedLens {
+        warp: Some(EmbeddedWarp {
+            odd: [[0.021, -0.012, 0.002], [0.02, -0.011, 0.002], [0.019, -0.01, 0.0015]],
+            planes: [[1.0, -0.05, 0.0, 0.0, 0.0, 0.0]; 3],
+            center: Point::new(0.5, 0.5),
+            radius: 0.6,
+        }),
+        vignette: Some(EmbeddedVignette { k: [0.6, -0.2, 0.05, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
+    };
+    let info = SourceInfo { lens: Some(profile), ..raw };
+    s.orientation = Orientation::Normal;
+    check("lens profile odd terms", &src, &info, &s, &RenderRequest::fit(700, 700));
 }
 
 #[test]

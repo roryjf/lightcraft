@@ -19,6 +19,7 @@ mod face_models;
 mod face_recognize;
 pub mod filters;
 pub mod keywords;
+mod lens_profiles;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
@@ -148,6 +149,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
+        v.extend(lens_profiles::specs());
         v
     })
 }

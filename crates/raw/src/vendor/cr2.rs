@@ -161,6 +161,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let white = white_from_data(&data, prec as u32);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    if metadata.lens_model.is_none() {
+        metadata.lens_model = mn.as_ref().and_then(|m| lightcraft_meta::canon_lens_model_in(&m.ifd));
+    }
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {

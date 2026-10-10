@@ -406,7 +406,9 @@ fn warp_params(
     p.extend([f(v.center.x), f(v.center.y), f(v.radius)]);
     p.push(wp.per_channel() as u32);
     p.push(wp.has_gain() as u32);
-    debug_assert_eq!(p.len(), 65);
+    // odd radial terms of the embedded warp (lens profiles; zero for DNG data), appended so nothing above moves
+    p.extend(w.odd.iter().flatten().map(|v| f(*v)));
+    debug_assert_eq!(p.len(), 74);
     p
 }
 
@@ -1050,6 +1052,7 @@ mod tests {
         use lightcraft_develop::{EmbeddedLens, EmbeddedWarp};
         let lens = EmbeddedLens {
             warp: Some(EmbeddedWarp {
+                odd: Default::default(),
                 planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002]; 3],
                 center: lightcraft_geom::Point::new(0.52, 0.48),
                 radius: 0.6,

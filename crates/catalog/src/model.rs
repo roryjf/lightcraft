@@ -152,6 +152,20 @@ impl CopyrightStatus {
     }
 }
 
+/// A lens profile matched to (or chosen for) a photo, already interpolated for its focal length, aperture and
+/// camera: the correction itself plus what it is, for display.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LensProfile {
+    /// The profile's lens, as the database names it.
+    pub lens: String,
+    /// Where the profile came from (`"lensfun 43f9e00"`).
+    pub source: String,
+    /// Chosen by hand rather than matched from the photo's metadata (a later automatic match leaves it alone).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
+    pub correction: lightcraft_develop::EmbeddedLens,
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -271,6 +285,11 @@ pub struct Photo {
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<Analysis>,
+    /// A lens profile for the photo (from the lensfun database: `lensProfiles.apply`, or chosen by hand), applied
+    /// under "Enable Profile Corrections" when the file carries no correction of its own (see
+    /// [`Photo::lens_correction`]). Format version 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_lens: Option<LensProfile>,
     /// A raw file whose sensor data can't be decoded yet (an unsupported raw variant): why (the
     /// raw decoder's reason, e.g. "Nikon Huffman-compressed NEF …"). The photo is shown and
     /// edited from the camera's embedded JPEG preview — a rendered image with the camera's
@@ -327,6 +346,7 @@ impl Photo {
             copy_name: None,
             import_look: None,
             analysis: None,
+            profile_lens: None,
             preview_only: None,
             local_baseline: None,
         }
@@ -352,6 +372,12 @@ impl Photo {
             None => self.camera_defaults(),
         }
     }
+    /// The lens correction "Enable Profile Corrections" applies: the file's own (DNG opcodes, a camera's built-in
+    /// correction), else the photo's lens profile.
+    pub fn lens_correction(&self) -> Option<&lightcraft_develop::EmbeddedLens> {
+        self.embedded_lens.as_ref().or(self.profile_lens.as_ref().map(|p| &p.correction))
+    }
+
     /// The built-in defaults for this photo, before any user default preset: raws start from
     /// their as-shot white balance; embedded lens corrections on when the file has them.
     pub fn camera_defaults(&self) -> DevelopSettings {

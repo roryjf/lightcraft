@@ -16,8 +16,35 @@ pub fn read_exif(bytes: &[u8]) -> Metadata {
 
 /// Like [`read_exif`] but reports a structurally invalid TIFF header / IFD0.
 pub fn try_read_exif(bytes: &[u8]) -> Result<Metadata, TiffError> {
-    let tiff = Tiff::parse(strip_exif_header(bytes))?;
-    Ok(from_tiff(&tiff))
+    let data = strip_exif_header(bytes);
+    let tiff = Tiff::parse(data)?;
+    let mut m = from_tiff(&tiff);
+    if m.lens_model.is_none() {
+        m.lens_model = canon_lens_model(data, &tiff);
+    }
+    Ok(m)
+}
+
+/// Canon maker-note tag `LensModel` (0x0095): the lens name EOS bodies record there, also those from before Exif 2.3
+/// added a standard `LensModel` (the EOS 450D and 550D write only this one).
+pub const CANON_LENS_MODEL: u16 = 0x0095;
+
+/// The lens name from a Canon maker note (`data` is the TIFF stream `tiff` was parsed from), for files whose Exif has
+/// no `LensModel`. `None` for other makes, notes without the tag or an empty name.
+pub fn canon_lens_model(data: &[u8], tiff: &Tiff) -> Option<String> {
+    let make = text(tiff.ifds.first(), t::MAKE)?;
+    if !make.to_ascii_lowercase().starts_with("canon") {
+        return None;
+    }
+    let entry = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let len = u64::try_from(entry.count()).ok()?;
+    let note = lightcraft_tiff::makernote::parse_makernote(data, entry.offset, len, tiff.order, &make)?;
+    canon_lens_model_in(&note.ifd)
+}
+
+/// [`CANON_LENS_MODEL`] from an already parsed Canon maker-note IFD.
+pub fn canon_lens_model_in(note: &Ifd) -> Option<String> {
+    text(Some(note), CANON_LENS_MODEL)
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -142,6 +169,79 @@ fn read_gps(g: &Ifd) -> Option<Gps> {
 pub(crate) mod tests {
     use super::*;
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    /// A little-endian TIFF: IFD0 {Make, ExifIFD} → Exif {LensModel?, MakerNote} → a plain (Canon-style) maker-note
+    /// IFD whose `0x0095` string sits after it, offsets from the TIFF header.
+    fn canon_exif(make: &str, exif_lens: Option<&str>, note_lens: &str) -> Vec<u8> {
+        let mut b: Vec<u8> = b"II*\0\x08\0\0\0".to_vec();
+        let put16 = |b: &mut Vec<u8>, v: u16| b.extend(v.to_le_bytes());
+        let put32 = |b: &mut Vec<u8>, v: u32| b.extend(v.to_le_bytes());
+        let ascii = |s: &str| [s.as_bytes(), b"\0"].concat();
+        let (make_v, note_v) = (ascii(make), ascii(note_lens));
+        let exif_lens_v = exif_lens.map(ascii);
+        // IFD0 at 8 (2 entries), the Exif IFD, the maker-note IFD (1 entry), then the strings
+        let exif = 8 + 2 + 2 * 12 + 4;
+        let exif_entries = 1 + exif_lens_v.is_some() as u16;
+        let note = exif + 2 + exif_entries as u32 * 12 + 4;
+        let note_len = 2 + 12 + 4;
+        let mut data_at = note + note_len;
+        let mut strings: Vec<u8> = Vec::new();
+        put16(&mut b, 2);
+        put16(&mut b, t::MAKE);
+        put16(&mut b, 2);
+        put32(&mut b, make_v.len() as u32);
+        put32(&mut b, data_at);
+        data_at += make_v.len() as u32;
+        strings.extend(&make_v);
+        put16(&mut b, t::EXIF_IFD);
+        put16(&mut b, 4);
+        put32(&mut b, 1);
+        put32(&mut b, exif);
+        put32(&mut b, 0);
+        put16(&mut b, exif_entries);
+        if let Some(v) = &exif_lens_v {
+            put16(&mut b, t::LENS_MODEL);
+            put16(&mut b, 2);
+            put32(&mut b, v.len() as u32);
+            put32(&mut b, data_at);
+            data_at += v.len() as u32;
+            strings.extend(v);
+        }
+        put16(&mut b, t::MAKER_NOTE);
+        put16(&mut b, 7);
+        put32(&mut b, note_len);
+        put32(&mut b, note);
+        put32(&mut b, 0);
+        put16(&mut b, 1);
+        put16(&mut b, CANON_LENS_MODEL);
+        put16(&mut b, 2);
+        put32(&mut b, note_v.len() as u32);
+        if note_v.len() <= 4 {
+            // TIFF keeps values of up to 4 bytes in the entry itself
+            b.extend(note_v.iter().copied().chain(std::iter::repeat(0)).take(4));
+        } else {
+            put32(&mut b, data_at);
+            strings.extend(&note_v);
+        }
+        put32(&mut b, 0);
+        assert_eq!(b.len() as u32, note + note_len);
+        b.extend(strings);
+        b
+    }
+
+    #[test]
+    fn canon_lens_name_from_the_maker_note() {
+        assert_eq!(read_exif(&canon_exif("Canon", None, "EF-S15-85mm f/3.5-5.6 IS USM")).lens_model.as_deref(), Some("EF-S15-85mm f/3.5-5.6 IS USM"));
+        // Exif's own LensModel wins; other makes' notes aren't read as Canon's; an empty name is no name
+        assert_eq!(read_exif(&canon_exif("Canon", Some("EF50mm f/1.8 II"), "other")).lens_model.as_deref(), Some("EF50mm f/1.8 II"));
+        assert_eq!(read_exif(&canon_exif("NIKON", None, "EF-S15-85mm")).lens_model, None);
+        assert_eq!(read_exif(&canon_exif("Canon", None, "")).lens_model, None);
+        // a truncated file is no lens name, never a failure
+        let full = canon_exif("Canon", None, "EF-S18-55mm f/3.5-5.6 IS");
+        for cut in [full.len() - 30, full.len() - 4, 40] {
+            let _ = read_exif(&full[..cut]);
+        }
+    }
 
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {
         let mut exif = IfdBuilder::new();

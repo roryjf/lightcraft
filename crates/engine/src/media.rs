@@ -214,9 +214,18 @@ impl DecodedSource {
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
-    /// with any stored camera tone curve.
+    /// with any stored camera tone curve. A lens correction the file doesn't carry (a lens profile, catalog data)
+    /// comes from `header` either way.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
-        self.info.clone().unwrap_or_else(|| SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header })
+        match self.info.clone() {
+            Some(mut facts) => {
+                if facts.lens.is_none() {
+                    facts.lens = header.lens;
+                }
+                facts
+            }
+            None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
+        }
     }
 }
 
@@ -885,6 +894,26 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
+/// What a photo's lens profile contributes to render and thumbnail keys: 0 without one. The file's own corrections
+/// are covered by [`content_key`]; a profile is catalog data that can change while the file doesn't.
+pub fn lens_profile_key(p: &Photo) -> u64 {
+    let Some(profile) = &p.profile_lens else { return 0 };
+    let mut h = Hasher128::new();
+    h.str("lens-profile");
+    let c = &profile.correction;
+    if let Some(w) = &c.warp {
+        for v in w.planes.iter().flatten().chain(w.odd.iter().flatten()).chain([&w.center.x, &w.center.y, &w.radius]) {
+            h.u64(v.to_bits());
+        }
+    }
+    if let Some(v) = &c.vignette {
+        for x in v.k.iter().chain([&v.center.x, &v.center.y, &v.radius]) {
+            h.u64(x.to_bits());
+        }
+    }
+    h.finish().0 as u64 | 1
+}
+
 pub fn source_info(p: &Photo) -> SourceInfo {
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     if matches!(p.source, Source::Demo { .. }) {
@@ -894,9 +923,17 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
         let (temp, tint) = if p.relative_wb() { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
-        SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens: p.embedded_lens, relative_wb: p.relative_wb(), ..Default::default() }
+        SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens: p.lens_correction().copied(),
+            relative_wb: p.relative_wb(),
+            ..Default::default()
+        }
     } else {
-        SourceInfo::default()
+        // rendered files (JPEG, TIFF…) take lens profiles too; the pipeline works on them in linear light
+        SourceInfo { lens: p.lens_correction().copied(), ..Default::default() }
     }
 }
 
@@ -947,10 +984,15 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ lens_profile_key(&p).rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            let lens = lens_profile_key(&p);
+            if lens != 0 {
+                k.u64(lens);
+            }
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -993,6 +1035,7 @@ impl crate::Session {
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(lens_profile_key(p))
             .finish()
     }
 
@@ -1079,6 +1122,7 @@ impl crate::Session {
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(lens_profile_key(p))
             .finish()
     }
 
@@ -1137,7 +1181,7 @@ impl crate::Session {
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            p.lens_correction(),
         );
         let ppl = frame.px_per_long(full_w);
         lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
@@ -1180,7 +1224,7 @@ impl crate::Session {
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(lens_profile_key(&p)).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })

@@ -558,14 +558,23 @@ pub struct EmbeddedLens {
 }
 
 /// DNG `WarpRectilinear`: per plane (R, G, B) `[kr0, kr1, kr2, kr3, kt0, kt1]`. For an output (corrected) point at
-/// offset `d = (p − center) / radius`, the source point is `center + radius · (d·f(r²) + tangential(d))`.
+/// offset `d = (p − center) / radius`, the source point is `center + radius · (d·f(r) + tangential(d))` with
+/// `f(r) = kr0 + kr1·r² + kr2·r⁴ + kr3·r⁶ + r·(k1 + k3·r² + k5·r⁴)`, `r = |d|`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddedWarp {
     pub planes: [[f64; 6]; 3],
+    /// Odd radial terms per plane, `[k1, k3, k5]`: DNG has none (always zero for camera data); lens profiles whose
+    /// model has odd powers of the radius (lensfun's PTLens distortion and poly3 TCA) need them to be exact.
+    #[serde(default, skip_serializing_if = "odd_is_zero")]
+    pub odd: [[f64; 3]; 3],
     /// Optical centre, normalized to the oriented image (0..1).
     pub center: Point,
     /// Normalisation radius as a fraction of the oriented image's long edge.
     pub radius: f64,
+}
+
+fn odd_is_zero(odd: &[[f64; 3]; 3]) -> bool {
+    odd.iter().flatten().all(|k| *k == 0.0)
 }
 
 /// DNG `FixVignetteRadial`: gain `1 + k0 r² + k1 r⁴ + … + k4 r¹⁰` with `r = |p − center| / radius`.

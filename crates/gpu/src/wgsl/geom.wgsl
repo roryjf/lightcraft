@@ -73,8 +73,8 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
 // 10 sx, 11 sy, 12 W, 13 H, 14 persp?, 15..24 persp_inv, 24 k1, 25..28 ca, 28 lens_dist,
 // 29 warp?, 30..48 warp planes (3 × 6), 48 warp centre x, 49 y, 50 warp radius, 51 vig_stops,
 // 52 vig_power, 53 lens_vig, 54 vignette?, 55..60 vignette k, 60 vignette centre x, 61 y,
-// 62 vignette radius, 63 per-channel?, 64 gain?
-const WP_N: u32 = 65u;
+// 62 vignette radius, 63 per-channel?, 64 gain?, 65..74 warp odd radial terms (3 planes × [k1, k3, k5])
+const WP_N: u32 = 74u;
 
 fn centre() -> vec2<f32> {
     return vec2<f32>(pf(12u) / 2.0, pf(13u) / 2.0);
@@ -104,7 +104,14 @@ fn embedded_warp(p: vec2<f32>, ch: u32) -> vec2<f32> {
     let o = 30u + 6u * min(ch, 2u);
     let d = (p - cc) / m;
     let r2 = d.x * d.x + d.y * d.y;
-    let f = pf(o) + r2 * (pf(o + 1u) + r2 * (pf(o + 2u) + r2 * pf(o + 3u)));
+    let q = 65u + 3u * min(ch, 2u);
+    var f = pf(o) + r2 * (pf(o + 1u) + r2 * (pf(o + 2u) + r2 * pf(o + 3u)));
+    let k1 = pf(q);
+    let k3 = pf(q + 1u);
+    let k5 = pf(q + 2u);
+    if (k1 != 0.0 || k3 != 0.0 || k5 != 0.0) {
+        f += sqrt(max(r2, 0.0)) * (k1 + r2 * (k3 + r2 * k5));
+    }
     let kt0 = pf(o + 4u);
     let kt1 = pf(o + 5u);
     let sx = d.x * f + kt0 * 2.0 * d.x * d.y + kt1 * (r2 + 2.0 * d.x * d.x);

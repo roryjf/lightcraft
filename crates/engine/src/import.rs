@@ -1163,6 +1163,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
+    // with lens profiles downloaded, new photos get theirs as they arrive (a database that can't be read is no reason
+    // to fail an import: `lensProfiles.status` reports it)
+    let lens_db = s.lens_profiles.database().ok().flatten();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
@@ -1231,6 +1234,11 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.preview_only = info.preview_only.clone();
+                if p.embedded_lens.is_none()
+                    && let Some(db) = &lens_db
+                {
+                    p.profile_lens = crate::lens_profiles::profile_for(db, &p, None, None).ok();
+                }
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);

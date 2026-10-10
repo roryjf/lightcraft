@@ -37,7 +37,22 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
         .or_else(|| config_dir().map(|d| d.join("denoise-models")))
 }
 
+/// Where lens profiles (the lensfun database) are kept: `$LIGHTCRAFT_LENS_PROFILES` if set, else
+/// `<config>/lens-profiles`.
+pub fn default_lens_profiles_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_LENS_PROFILES")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| config_dir().map(|d| d.join("lens-profiles")))
+}
+
 impl Session {
+    /// Keep lens profiles in the shared default folder ([`default_lens_profiles_dir`]).
+    pub fn with_default_lens_profiles(mut self) -> Self {
+        self.lens_profiles.dir = default_lens_profiles_dir();
+        self
+    }
+
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
     pub fn with_default_face_models(mut self) -> Self {
         self.face_models_dir = default_face_models_dir();

@@ -1,0 +1,14 @@
+[package]
+name = "lightcraft-lensfun"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft lens profiles: reads the lensfun lens database (CC BY-SA 3.0 data, fetched at runtime) and turns a matching calibration into a photo's lens correction (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-develop = { workspace = true }
+lightcraft-geom = { workspace = true }
+quick-xml = { workspace = true }

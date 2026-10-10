@@ -46,6 +46,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("codecs", Class::Layer(1)),
     ("meta", Class::Layer(1)),
     ("develop", Class::Layer(1)),
+    ("lensfun", Class::Layer(1)),
     ("faces", Class::Layer(1)),
     ("scenes", Class::Layer(1)),
     ("pipeline", Class::Layer(2)),
@@ -76,6 +77,7 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "raw"],
     &["meta", "codecs"],
     &["meta", "develop"],
+    &["develop", "lensfun"],
     &["develop", "scenes"],
     &["codecs", "raw"],
 ];

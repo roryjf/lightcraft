@@ -110,7 +110,11 @@ impl Warp {
     pub fn per_channel(&self) -> bool {
         self.ca[0] != self.ca[1]
             || self.ca[1] != self.ca[2]
-            || (self.lens_dist != 0.0 && self.lens.and_then(|l| l.warp).is_some_and(|w| w.planes[0] != w.planes[1] || w.planes[1] != w.planes[2]))
+            || (self.lens_dist != 0.0
+                && self
+                    .lens
+                    .and_then(|l| l.warp)
+                    .is_some_and(|w| w.planes[0] != w.planes[1] || w.planes[1] != w.planes[2] || w.odd[0] != w.odd[1] || w.odd[1] != w.odd[2]))
     }
 
     pub fn has_gain(&self) -> bool {
@@ -271,10 +275,14 @@ fn embedded_warp_real<T: Real>(wp: &EmbeddedWarp, x: T, y: T, ch: usize, w: f64,
     let (cx, cy) = (wp.center.x * w, wp.center.y * h);
     let m = (wp.radius * w.max(h)).max(1e-9);
     let [kr0, kr1, kr2, kr3, kt0, kt1] = wp.planes[ch.min(2)];
+    let [k1, k3, k5] = wp.odd[ch.min(2)];
     let dx = (x - cx) / m;
     let dy = (y - cy) / m;
     let r2 = dx * dx + dy * dy;
-    let f = (((r2 * kr3 + kr2) * r2 + kr1) * r2) + kr0;
+    let mut f = (((r2 * kr3 + kr2) * r2 + kr1) * r2) + kr0;
+    if k1 != 0.0 || k3 != 0.0 || k5 != 0.0 {
+        f = f + r2.sqrt_nonneg() * (((r2 * k5) + k3) * r2 + k1);
+    }
     let sx = dx * f + dx * (kt0 * 2.0) * dy + (r2 + dx * 2.0 * dx) * kt1;
     let sy = dy * f + dx * (kt1 * 2.0) * dy + (r2 + dy * 2.0 * dy) * kt0;
     (sx * m + cx, sy * m + cy)
@@ -313,7 +321,7 @@ pub fn reorient_lens(lens: &EmbeddedLens, o: Orientation, w: f64, h: f64) -> Emb
             let e = o.map(c.x + kt1, c.y + kt0, w, h);
             [a, b, cc, d, e.1 - c2.1, e.0 - c2.0]
         });
-        EmbeddedWarp { planes, center: map_pt(wp.center), radius: wp.radius * long_ratio }
+        EmbeddedWarp { planes, odd: wp.odd, center: map_pt(wp.center), radius: wp.radius * long_ratio }
     });
     let vignette = lens.vignette.map(|v| EmbeddedVignette { k: v.k, center: map_pt(v.center), radius: v.radius * long_ratio });
     EmbeddedLens { warp, vignette }
@@ -645,7 +653,8 @@ mod tests {
                 ]
             };
             let planes = [plane(), plane(), plane()];
-            let warp = EmbeddedWarp { planes, center: Point::new(r.range(0.4, 0.6), r.range(0.4, 0.6)), radius: r.range(0.5, 0.8) };
+            let warp =
+                EmbeddedWarp { odd: Default::default(), planes, center: Point::new(r.range(0.4, 0.6), r.range(0.4, 0.6)), radius: r.range(0.5, 0.8) };
             wp.lens = Some(EmbeddedLens { warp: Some(warp), vignette: None });
             wp.lens_dist = r.maybe(0.0, 2.0);
         }
@@ -704,13 +713,40 @@ mod tests {
         assert_eq!(hash, 0x3FA5_7473_D795_9E32, "f64 warp results changed");
     }
 
+    /// [`random_warp`] whose embedded lens warp also has odd radial terms (lens-profile models such as lensfun's
+    /// PTLens): the f64 hash test above keeps using `random_warp` alone, so its inputs don't change.
+    fn random_profile_warp(r: &mut Rng) -> Warp {
+        let mut wp = random_warp(r);
+        let mut odd = || [r.range(-0.06, 0.06), r.range(-0.04, 0.04), r.range(-0.01, 0.01)];
+        let terms = [odd(), odd(), odd()];
+        let warp = match wp.lens.and_then(|l| l.warp) {
+            Some(w) => EmbeddedWarp { odd: terms, ..w },
+            None => EmbeddedWarp { odd: terms, planes: [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 0.6 },
+        };
+        wp.lens = Some(EmbeddedLens { warp: Some(warp), vignette: None });
+        if wp.lens_dist == 0.0 {
+            wp.lens_dist = 1.0;
+        }
+        wp
+    }
+
     /// The interval evaluation of `framing` bounds the f64 evaluation of every point of the box.
     #[test]
     fn interval_framing_encloses_every_f64_result() {
-        let mut r = Rng(7);
+        framing_encloses(7, random_warp);
+    }
+
+    /// The same with odd radial terms (the `sqrt` of the squared radius) in the embedded warp.
+    #[test]
+    fn interval_framing_encloses_lens_profile_odd_terms() {
+        framing_encloses(11, random_profile_warp);
+    }
+
+    fn framing_encloses(seed: u64, make: fn(&mut Rng) -> Warp) {
+        let mut r = Rng(seed);
         let (mut decided, mut total) = (0, 0);
         for _ in 0..500 {
-            let wp = random_warp(&mut r);
+            let wp = make(&mut r);
             let a = lightcraft_geom::Affine([
                 r.range(0.5, 2.0),
                 r.range(-0.2, 0.2),
@@ -753,6 +789,7 @@ mod tests {
     fn block_coverage_agrees_with_every_pixel() {
         let lens = EmbeddedLens {
             warp: Some(EmbeddedWarp {
+                odd: Default::default(),
                 planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002], [1.0, -0.028, 0.01, 0.0, 0.001, -0.002], [1.0, -0.026, 0.01, 0.0, 0.001, -0.002]],
                 center: Point::new(0.52, 0.48),
                 radius: 0.6,
@@ -861,7 +898,12 @@ mod tests {
     #[test]
     fn reorient_keeps_centre_mapping() {
         let lens = EmbeddedLens {
-            warp: Some(EmbeddedWarp { planes: [[1.0, 0.01, 0.0, 0.0, 0.001, 0.002]; 3], center: Point::new(0.4, 0.5), radius: 0.6 }),
+            warp: Some(EmbeddedWarp {
+                odd: Default::default(),
+                planes: [[1.0, 0.01, 0.0, 0.0, 0.001, 0.002]; 3],
+                center: Point::new(0.4, 0.5),
+                radius: 0.6,
+            }),
             vignette: Some(EmbeddedVignette { k: [0.2, 0.0, 0.0, 0.0, 0.0], center: Point::new(0.4, 0.5), radius: 0.6 }),
         };
         let r = reorient_lens(&lens, Orientation::Rotate90, 300.0, 200.0);

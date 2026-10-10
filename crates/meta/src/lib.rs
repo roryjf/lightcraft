@@ -23,7 +23,7 @@ mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
-pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
+pub use exif::{CANON_LENS_MODEL, canon_lens_model, canon_lens_model_in, from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};

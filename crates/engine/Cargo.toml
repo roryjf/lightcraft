@@ -13,6 +13,7 @@ lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
+lightcraft-lensfun = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-pipeline = { workspace = true }
 lightcraft-gpu = { workspace = true }

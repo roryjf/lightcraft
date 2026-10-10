@@ -57,7 +57,8 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
    (references stay in the local `plan/`), then tune against the numbers.
-5. **Lens profiles of our own** (LR-EDIT-OPTICS-PROFILE, P1).
+5. **Lens profiles** (LR-EDIT-OPTICS-PROFILE, P1): lensfun profiles (downloaded on request) cover most common lenses
+   (docs/lens-profiles.md); left: a picker in the Optics panel, fisheye lenses, our own calibration for the rest.
 6. **AI model strategy** (maintainer decision): which permissively licensed models (or our own training) for
    segmentation masks and denoise. Bayer denoise inference is implemented in pure Rust with an opt-in GPL model; release policy and independently licensed weights remain open. Unblocks M12 and Enhance. Face detection and recognition run on our own checked Rust engine. Object / Describe masks now
    run Meta's SAM 3 in pure Rust (optional, user-consented download under the non-OSI SAM License; CDN mirrors still
@@ -125,7 +126,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
 | Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
-| Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
+| Lens profiles beyond lensfun (our own calibration targets, fitting, data); fisheye models | LR-EDIT-OPTICS-PROFILE | 10–20 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
 | HDR editing, display, visualisation and export | Q. HDR, LR-EXP-HDR | 15–25 | medium |

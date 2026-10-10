@@ -23,6 +23,7 @@ lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
 lightcraft-develop = { path = "crates/develop" }
+lightcraft-lensfun = { path = "crates/lensfun" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
 lightcraft-gpu = { path = "crates/gpu" }

@@ -1,4 +1,4 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Interface, Faces, AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance, Interface, Faces, AI Denoise, Lens Profiles.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -24,6 +24,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("lens", "Lens Profiles"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -52,8 +53,106 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "interface" => interface_tab(app, ui, &t),
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
+        "lens" => lens_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
+}
+
+// --------------------------------------------------------------------------------- Lens Profiles
+
+/// The lensfun database: download it, apply it to the library, remove it (`lensProfiles.*` commands).
+fn lens_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, "Lens Profiles");
+    hint(
+        ui,
+        t,
+        "Corrects distortion, colour fringes (lateral chromatic aberration) and vignetting with profiles from the lensfun lens database. Each photo is matched by its camera, lens and focal length; the correction is used when Enable Profile Corrections is on (Edit → Optics).",
+    );
+    let st = app.session.execute("lensProfiles.status", &json!({})).unwrap_or(Value::Null);
+    if st["folder"].is_null() {
+        hint(ui, t, "This build has nowhere to keep lens profiles. (The desktop app has.)");
+        return;
+    }
+    let dl = &st["download"];
+    match dl["state"].as_str() {
+        Some("running") => {
+            let (done, total) = (dl["bytes"].as_u64().unwrap_or(0), dl["total"].as_u64().unwrap_or(1).max(1));
+            ui.horizontal(|ui| {
+                let text = format!("{:.1} of {:.1} MB", done as f64 / 1e6, total as f64 / 1e6);
+                ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(240.0).text(RichText::new(text).size(11.0)));
+                let r = ui.button(crate::i18n::tr("Cancel"));
+                register(ui.ctx(), "button:lensProfilesCancel", r.rect);
+                if r.clicked() {
+                    let _ = app.run("lensProfiles.cancel", json!({}));
+                }
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        Some("failed") => hint(ui, t, dl["error"].as_str().unwrap_or("The download failed.")),
+        _ => {}
+    }
+    if let Some(e) = st["error"].as_str() {
+        hint(ui, t, e);
+    }
+    let running = dl["state"] == "running";
+    if st["installed"] == true {
+        row(ui, t, "Database", |ui| {
+            ui.label(format!(
+                "{} · {} cameras · {} lenses",
+                st["version"].as_str().unwrap_or(""),
+                st["cameras"].as_u64().unwrap_or(0),
+                st["lenses"].as_u64().unwrap_or(0)
+            ))
+        });
+        ui.add_space(4.0);
+        let enable_id = egui::Id::new("lens-profiles-enable");
+        let mut enable = ui.ctx().data(|d| d.get_temp::<bool>(enable_id)).unwrap_or(false);
+        if check(ui, "lensProfilesEnable", &mut enable, "Also turn on Enable Profile Corrections for matched photos") {
+            ui.ctx().data_mut(|d| d.insert_temp(enable_id, enable));
+        }
+        let result_id = egui::Id::new("lens-profiles-result");
+        ui.horizontal(|ui| {
+            let r = ui.button(crate::i18n::tr("Apply to Library"));
+            register(ui.ctx(), "button:lensProfilesApply", r.rect);
+            if r.clicked() {
+                let msg = match app.run("lensProfiles.apply", json!({"all": true, "enable": enable})) {
+                    Ok(v) => format!(
+                        "Matched {} photos ({} updated, {} without a profile){}.",
+                        v["matched"],
+                        v["changed"],
+                        v["notMatched"]["noProfile"].as_u64().unwrap_or(0)
+                            + v["notMatched"]["noFocalLength"].as_u64().unwrap_or(0)
+                            + v["notMatched"]["unsupportedLens"].as_u64().unwrap_or(0),
+                        if enable { format!("; corrections turned on for {}", v["enabled"]) } else { String::new() }
+                    ),
+                    Err(e) => e,
+                };
+                ui.ctx().data_mut(|d| d.insert_temp(result_id, msg));
+            }
+            let r = ui.button(crate::i18n::tr("Remove Downloaded Profiles"));
+            register(ui.ctx(), "button:lensProfilesRemove", r.rect);
+            if r.clicked() {
+                let _ = app.run("lensProfiles.remove", json!({}));
+            }
+        });
+        if let Some(msg) = ui.ctx().data(|d| d.get_temp::<String>(result_id)) {
+            hint(ui, t, &msg);
+        }
+        hint(
+            ui,
+            t,
+            "Photos keep their profiles when the database is removed. Files that carry their camera's own correction (DNG, some raws) use that instead.",
+        );
+    } else if !running {
+        let r = ui.button(format!("{} ({:.0} MB)", crate::i18n::tr("Download Lens Profiles"), st["downloadBytes"].as_f64().unwrap_or(0.0) / 1e6));
+        register(ui.ctx(), "button:lensProfilesDownload", r.rect);
+        if r.clicked() {
+            let _ = app.run("lensProfiles.download", json!({}));
+        }
+        hint(ui, t, "Downloaded from the lensfun project on GitHub (one pinned version, every file checked).");
+    }
+    ui.add_space(6.0);
+    hint(ui, t, st["attribution"].as_str().unwrap_or(""));
 }
 
 pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {

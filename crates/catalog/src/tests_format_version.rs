@@ -47,17 +47,56 @@ fn v1_library_loads_and_is_upgraded() {
     assert_eq!((r.replayed, r.upgraded_from), (1, None));
 }
 
-/// A library saved before albums could be ordered by hand opens as it was and is rewritten as v3.
+/// Libraries saved before albums could be ordered by hand (v2) or before lens profiles (v3) open as they were and
+/// are rewritten in the current format.
 #[test]
-fn v2_library_loads_and_is_upgraded() {
-    let (base, log, full) = legacy_parts();
+fn v2_and_v3_libraries_load_and_are_upgraded() {
+    for old in [2u32, 3] {
+        let (base, log, full) = legacy_parts();
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":{old},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+        );
+        m.set(LOG, log.into_bytes());
+        let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+        assert_eq!(c.to_snapshot(), full.to_snapshot());
+        assert_eq!((r.replayed, r.upgraded_from), (1, Some(old)));
+        assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    }
+}
+
+/// A lens profile survives the log and the snapshot, and undo puts back what was there.
+#[test]
+fn lens_profiles_round_trip_and_undo() {
+    use crate::model::LensProfile;
+    use lightcraft_develop::{EmbeddedLens, EmbeddedWarp};
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    let Op::AddPhoto { photo: added } = &op else { panic!("{op:?}") };
+    let id = added.id;
+    c.apply(op.clone()).unwrap();
+    let profile = LensProfile {
+        lens: "Test 15-85mm".into(),
+        source: "lensfun test".into(),
+        manual: false,
+        correction: EmbeddedLens {
+            warp: Some(EmbeddedWarp { odd: [[0.01, -0.002, 0.0003]; 3], planes: [[1.0, -0.05, 0.0, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
+            vignette: None,
+        },
+    };
+    let set = Op::SetLensProfile { id, profile: Some(Box::new(profile.clone())) };
+    let undo = c.apply(set.clone()).unwrap();
+    assert_eq!(c.photo(id).unwrap().profile_lens.as_ref(), Some(&profile));
+    assert_eq!(c.photo(id).unwrap().lens_correction(), Some(&profile.correction));
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
-    m.set(LOG, log.into_bytes());
-    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(c.to_snapshot(), full.to_snapshot());
-    assert_eq!((r.replayed, r.upgraded_from), (1, Some(2)));
-    assert_eq!(snapshot_version(&m), 3);
+    m.set(LOG, format!("{}\n{}\n", encode_record(1, &op), encode_record(2, &set)).into_bytes());
+    let (_, loaded, _) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(loaded.photo(id).unwrap().profile_lens.as_ref(), Some(&profile), "from the log");
+    let (_, reloaded, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(reloaded.to_snapshot(), loaded.to_snapshot(), "from the snapshot");
+    c.apply(undo).unwrap();
+    assert!(c.photo(id).unwrap().profile_lens.is_none());
 }
 
 #[test]
@@ -193,8 +232,9 @@ fn op_variants_are_versioned() {
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
             Op::SetAlbumOrder { .. } => 3,
+            Op::SetLensProfile { .. } => 4,
         }
     }
-    let newest = since(&Op::SetAlbumOrder { id: AlbumId(0), order: None });
+    let newest = since(&Op::SetLensProfile { id: crate::PhotoId(0), profile: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }
